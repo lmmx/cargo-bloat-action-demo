@@ -52,15 +52,45 @@ jobs:
         id: compare
         if: github.event_name == 'pull_request'
         run: |
-          # Extract total size from both outputs
-          pr_size=$(grep "\.text section size" bloat_pr.txt | grep -oP '\d+\.\d+[KM]iB' | head -1)
-          base_size=$(grep "\.text section size" bloat_base.txt | grep -oP '\d+\.\d+[KM]iB' | head -1)
+          # Extract total size in bytes from both outputs
+          pr_line=$(grep "\.text section size" bloat_pr.txt)
+          base_line=$(grep "\.text section size" bloat_base.txt)
+
+          # Extract size values (convert to bytes for accurate comparison)
+          pr_size=$(echo "$pr_line" | grep -oP '\d+\.\d+[KM]iB' | head -1)
+          base_size=$(echo "$base_line" | grep -oP '\d+\.\d+[KM]iB' | head -1)
+
+          # Convert to bytes for calculation
+          pr_bytes=$(echo "$pr_line" | grep -oP '\d+\.\d+[KM]iB' | head -1 | awk '{
+            if ($1 ~ /KiB/) { gsub(/KiB/, ""); print $1 * 1024 }
+            else if ($1 ~ /MiB/) { gsub(/MiB/, ""); print $1 * 1024 * 1024 }
+            else print $1
+          }')
+          base_bytes=$(echo "$base_line" | grep -oP '\d+\.\d+[KM]iB' | head -1 | awk '{
+            if ($1 ~ /KiB/) { gsub(/KiB/, ""); print $1 * 1024 }
+            else if ($1 ~ /MiB/) { gsub(/MiB/, ""); print $1 * 1024 * 1024 }
+            else print $1
+          }')
+
+          # Calculate percentage change
+          pct_change=$(echo "scale=2; (($pr_bytes - $base_bytes) / $base_bytes) * 100" | bc)
+
+          # Format with + sign if positive
+          if (( $(echo "$pct_change >= 0" | bc -l) )); then
+            pct_display="+${pct_change}%"
+          else
+            pct_display="${pct_change}%"
+          fi
+
+          echo "pct_change=${pct_display}" >> $GITHUB_OUTPUT
+          echo "pr_size=${pr_size}" >> $GITHUB_OUTPUT
+          echo "base_size=${base_size}" >> $GITHUB_OUTPUT
 
           {
             echo 'comparison<<EOF'
             echo "### Size Comparison"
             echo "- **Base branch**: $base_size"
-            echo "- **PR branch**: $pr_size"
+            echo "- **PR branch**: $pr_size ($pct_display)"
             echo ""
             echo "### PR Branch Results"
             cat bloat_pr.txt
@@ -74,9 +104,15 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           echo "### 📦 Cargo Bloat Comparison" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Binary size change: ${{ steps.compare.outputs.pct_change }}**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.compare.outputs.comparison }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Set check status with percentage
+          echo "::notice title=Binary Size Change::${{ steps.compare.outputs.pct_change }} (.text: ${{ steps.compare.outputs.base_size }} → ${{ steps.compare.outputs.pr_size }})"
 
       - name: Display results (Push)
         if: github.event_name == 'push'
