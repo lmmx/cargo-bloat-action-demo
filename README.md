@@ -21,7 +21,8 @@ Shows size change as inline status for same-repo PRs, plus detailed analysis in 
 - rust-cache for dependency caching
 - Fork PRs see analysis in check summary (inline status skipped due to GitHub permissions)
 
-If you primarily accept PRs from forks, delete the "Update commit status" step from the workflow to avoid the skipped check.
+> [!TIP]
+> If you primarily accept PRs from forks, delete the "Update commit status" step from the workflow to avoid the skipped check.
 
 ## Setup
 
