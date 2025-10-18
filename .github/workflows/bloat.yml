@@ -5,6 +5,10 @@ on:
   push:
     branches: [master]
 
+permissions:
+  contents: read
+  statuses: write
+
 jobs:
   bloat-check:
     runs-on: ubuntu-latest
