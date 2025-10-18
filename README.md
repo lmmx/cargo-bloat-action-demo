@@ -1,3 +1,4 @@
+```markdown
 # cargo-bloat GitHub Actions Demo
 
 Shows binary size changes in PRs using cargo bloat.
@@ -27,3 +28,4 @@ Shows size change as inline status for same-repo PRs, plus detailed analysis in 
 ## Setup
 
 Uses [taiki-e/install-action](https://github.com/taiki-e/install-action) for cargo-bloat. Requires `contents: read` and `statuses: write` permissions.
+```
