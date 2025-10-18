@@ -15,15 +15,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Need history for base comparison
+          fetch-depth: 0
 
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-bloat
 
-      - name: Run cargo bloat on PR branch
+      - name: Build base branch
+        id: bloat_base
+        if: github.event_name == 'pull_request'
+        run: |
+          # Build base branch in separate target directory
+          git checkout ${{ github.event.pull_request.base.sha }}
+          CARGO_TARGET_DIR=target-base cargo bloat --release > bloat_base.txt 2>&1 || true
+          git checkout -
+
+          {
+            echo 'output<<EOF'
+            cat bloat_base.txt
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+
+      - name: Build PR branch
         id: bloat_pr
         run: |
+          # Build PR branch in default target directory
           cargo bloat --release > bloat_pr.txt 2>&1 || true
 
           {
@@ -32,39 +48,16 @@ jobs:
             echo 'EOF'
           } >> $GITHUB_OUTPUT
 
-      - name: Run cargo bloat on base branch
-        id: bloat_base
-        if: github.event_name == 'pull_request'
-        run: |
-          # Checkout base branch
-          git checkout ${{ github.event.pull_request.base.sha }}
-
-          # Clean and rebuild
-          cargo clean
-          cargo bloat --release > bloat_base.txt 2>&1 || true
-
-          {
-            echo 'output<<EOF'
-            cat bloat_base.txt
-            echo 'EOF'
-          } >> $GITHUB_OUTPUT
-
-          # Return to PR branch
-          git checkout -
-
       - name: Compare bloat results
         id: compare
         if: github.event_name == 'pull_request'
         run: |
-          # Extract total size in bytes from both outputs
           pr_line=$(grep "\.text section size" bloat_pr.txt)
           base_line=$(grep "\.text section size" bloat_base.txt)
 
-          # Extract size values (convert to bytes for accurate comparison)
           pr_size=$(echo "$pr_line" | grep -oP '\d+\.\d+[KM]iB' | head -1)
           base_size=$(echo "$base_line" | grep -oP '\d+\.\d+[KM]iB' | head -1)
 
-          # Convert to bytes for calculation
           pr_bytes=$(echo "$pr_line" | grep -oP '\d+\.\d+[KM]iB' | head -1 | awk '{
             if ($1 ~ /KiB/) { gsub(/KiB/, ""); print $1 * 1024 }
             else if ($1 ~ /MiB/) { gsub(/MiB/, ""); print $1 * 1024 * 1024 }
@@ -76,10 +69,8 @@ jobs:
             else print $1
           }')
 
-          # Calculate percentage change
           pct_change=$(echo "scale=2; (($pr_bytes - $base_bytes) / $base_bytes) * 100" | bc)
 
-          # Format with + sign if positive
           if (( $(echo "$pct_change >= 0" | bc -l) )); then
             pct_display="+${pct_change}%"
           else
@@ -115,7 +106,6 @@ jobs:
           echo "${{ steps.compare.outputs.comparison }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-          # Set check status with percentage
           echo "::notice title=Binary Size Change::${{ steps.compare.outputs.pct_change }} (.text: ${{ steps.compare.outputs.base_size }} → ${{ steps.compare.outputs.pr_size }})"
 
       - name: Update commit status
