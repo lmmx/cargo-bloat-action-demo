@@ -10,51 +10,116 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need history for base comparison
 
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-bloat
 
-      - name: Run cargo bloat
-        id: bloat
+      - name: Run cargo bloat on PR branch
+        id: bloat_pr
         run: |
-          # Run cargo bloat and capture output
-          bloat_output=$(cargo bloat --release 2>&1)
+          cargo bloat --release > bloat_pr.txt 2>&1 || true
 
-          # Save full output to step output (escape for multiline)
           {
             echo 'output<<EOF'
-            echo "$bloat_output"
+            cat bloat_pr.txt
             echo 'EOF'
           } >> $GITHUB_OUTPUT
 
-          # Extract top functions (first 10 lines after header)
-          top_functions=$(echo "$bloat_output" | grep -A 10 "File.*Crate.*Name" || echo "No bloat data available")
-          {
-            echo 'top_functions<<EOF'
-            echo "$top_functions"
-            echo 'EOF'
-          } >> $GITHUB_OUTPUT
-
-      - name: Display results
+      - name: Run cargo bloat on base branch
+        id: bloat_base
+        if: github.event_name == 'pull_request'
         run: |
-          echo "### Cargo Bloat Analysis" >> $GITHUB_STEP_SUMMARY
+          # Checkout base branch
+          git checkout ${{ github.event.pull_request.base.sha }}
+
+          # Clean and rebuild
+          cargo clean
+          cargo bloat --release > bloat_base.txt 2>&1 || true
+
+          {
+            echo 'output<<EOF'
+            cat bloat_base.txt
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+
+          # Return to PR branch
+          git checkout -
+
+      - name: Compare bloat results
+        id: compare
+        if: github.event_name == 'pull_request'
+        run: |
+          # Extract total size from both outputs
+          pr_size=$(grep "\.text section size" bloat_pr.txt | grep -oP '\d+\.\d+[KM]iB' | head -1)
+          base_size=$(grep "\.text section size" bloat_base.txt | grep -oP '\d+\.\d+[KM]iB' | head -1)
+
+          {
+            echo 'comparison<<EOF'
+            echo "### Size Comparison"
+            echo "- **Base branch**: $base_size"
+            echo "- **PR branch**: $pr_size"
+            echo ""
+            echo "### PR Branch Results"
+            cat bloat_pr.txt
+            echo ""
+            echo "### Base Branch Results"
+            cat bloat_base.txt
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+
+      - name: Display results (PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "### 📦 Cargo Bloat Comparison" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.bloat.outputs.output }}" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.compare.outputs.comparison }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - name: Comment on PR (optional)
+      - name: Display results (Push)
+        if: github.event_name == 'push'
+        run: |
+          echo "### 📦 Cargo Bloat Analysis" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.bloat_pr.outputs.output }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Comment on PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
+            const fs = require('fs');
+            const prBloat = fs.readFileSync('bloat_pr.txt', 'utf8');
+            const baseBloat = fs.readFileSync('bloat_base.txt', 'utf8');
+
+            // Extract .text sizes
+            const prSize = prBloat.match(/\.text section size.*?(\d+\.\d+[KM]iB)/)?.[1] || 'N/A';
+            const baseSize = baseBloat.match(/\.text section size.*?(\d+\.\d+[KM]iB)/)?.[1] || 'N/A';
+
             const output = `### 📦 Cargo Bloat Analysis
 
+            | Branch | .text Size |
+            |--------|------------|
+            | Base (\`${context.payload.pull_request.base.ref}\`) | ${baseSize} |
+            | PR (\`${context.payload.pull_request.head.ref}\`) | ${prSize} |
+
             <details>
-            <summary>Top Functions by Size</summary>
+            <summary>PR Branch Bloat Results</summary>
 
             \`\`\`
-            ${{ steps.bloat.outputs.top_functions }}
+            ${prBloat}
+            \`\`\`
+
+            </details>
+
+            <details>
+            <summary>Base Branch Bloat Results</summary>
+
+            \`\`\`
+            ${baseBloat}
             \`\`\`
 
             </details>`;
